@@ -1,0 +1,61 @@
+name: Build downloadable Star Crash ROM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-emerald:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      UNUSED_ERROR: '0'
+      DEPRECATED_ERROR: '0'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install GBA toolchain and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git make python3 libpng-dev \
+            binutils-arm-none-eabi gcc-arm-none-eabi libnewlib-arm-none-eabi
+          arm-none-eabi-gcc --version
+
+      - name: Build Emerald ROM and verify output
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j2 all 2>&1 | tee build.log
+          test -s pokeemerald.gba
+          python3 - <<'PY'
+          from pathlib import Path
+          rom = Path('pokeemerald.gba').read_bytes()
+          if len(rom) < 0xC0 or rom[0xB2] != 0x96:
+              raise SystemExit('Invalid GBA header or unexpectedly short ROM')
+          print(f'GBA ROM generated successfully: {len(rom)} bytes')
+          PY
+          sha256sum pokeemerald.gba > pokeemerald.sha256
+
+      - name: Upload playable ROM candidate
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thmn-star-crash-emerald
+          path: |
+            pokeemerald.gba
+            pokeemerald.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log (including errors)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thmn-star-crash-build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
